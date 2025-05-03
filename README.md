@@ -7,8 +7,6 @@
 
 The Akita Switch is a versatile sensor/actuator system designed to extend the capabilities of Meshtastic devices, particularly those based on the ESP32 platform. It enables remote monitoring of sensors and control of terminal blocks through a local web interface and the Meshtastic network.
 
-**New in v4:** Added placeholders/examples for real sensor integration (DHT, BME280, BH1750), basic web authentication for config page, OTA password option, improved web styling, placeholders for power management (firmware), and placeholders/arguments for MQTT publishing (host script).
-
 This project consists of two main parts:
 1.  **Firmware (`Akita_Sensor.ino`):** Runs on an ESP32. Acts as I2C slave, reads sensors, controls outputs, hosts SoftAP/Web Server (with basic auth), connects to WiFi for OTA (with optional password), handles config persistence (SPIFFS).
 2.  **Host Script (`akita_meshtastic.py`):** Runs on a host computer (e.g., RPi). Acts as I2C master, relays Meshtastic commands, sends sensor data to Meshtastic, logs sensor data locally, includes placeholders/config for MQTT publishing.
