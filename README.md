@@ -1,4 +1,4 @@
-# Akita Switch for Meshtastic (v4 - Ready for Sensors)
+# Akita Switch for Meshtastic
 
 **Organization:** Akita Engineering
 **Website:** [www.akitaengineering.com](https://www.akitaengineering.com)
@@ -33,7 +33,7 @@ This project consists of two main parts:
 
 ## Hardware Requirements
 
-* (Same as v3) ESP32 board, Host computer, Meshtastic Node, Optional Sensors/Relays, I2C Wiring (with pull-ups).
+* ESP32 board, Host computer, Meshtastic Node, Optional Sensors/Relays, I2C Wiring (with pull-ups).
 
 ## Software Requirements
 
@@ -47,7 +47,7 @@ This project consists of two main parts:
 
 ## Installation and Setup
 
-**1. Hardware Connections:** (Same as v3)
+**1. Hardware Connections:** 
 
 **2. Sensor Module Firmware (`Akita_Sensor.ino`):**
     * Open `firmware/Akita_Sensor/Akita_Sensor.ino`.
@@ -62,7 +62,7 @@ This project consists of two main parts:
     * Select board, upload sketch. Monitor Serial (115200 baud).
 
 **3. Initial Configuration (Web Interface):**
-    * (Same as v3) Connect to SoftAP (`AkitaSwitchSetup-XXXX`, pass: `password`), navigate to `http://192.168.4.1`.
+    * Connect to SoftAP (`AkitaSwitchSetup-XXXX`, pass: `password`), navigate to `http://192.168.4.1`.
     * Go to `/config`. You will be prompted for authentication (default: `admin` / `akita`).
     * Enter WiFi details, I2C Address, Hostname, and optionally change the Web Admin Password.
     * Save. Device reboots and should connect to your WiFi.
@@ -83,7 +83,7 @@ This project consists of two main parts:
 ## Usage
 
 * **Local Web Interface:** Access via ESP32's IP. Use `/` for status/control, `/config` for settings (requires login).
-* **Meshtastic Network:** Send commands, receive sensor data (same as v3).
+* **Meshtastic Network:** Send commands, receive sensor data.
 * **OTA Updates:** Use Arduino IDE OTA (Tools -> Port -> YourHostname). Requires OTA password if set in firmware.
 * **Sensor Data Logging:** Data appended to file specified by `--sensor-log` on host. Rotates automatically.
 * **MQTT Publishing:** If `--mqtt-broker` is set, sensor data (JSON) will be published to the specified topic.
