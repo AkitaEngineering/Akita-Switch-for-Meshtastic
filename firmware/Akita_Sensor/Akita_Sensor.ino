@@ -113,6 +113,13 @@ bool wifiConnected = false;
 bool apMode = false;
 const char* AP_SSID_PREFIX = "AkitaSwitchSetup-";
 
+#ifdef ENABLE_DEEP_SLEEP
+volatile unsigned long lastActivityMillis = 0;
+volatile unsigned long lastI2CRequestMillis = 0;
+const unsigned long INACTIVITY_BEFORE_SLEEP_MS = 30000UL; // 30s before entering deep sleep
+bool skipFullSetupOnWake = false;
+#endif
+
 // --- Function Declarations ---
 // (Declarations as before)
 void loadConfiguration();
@@ -390,9 +397,9 @@ void prepareSensorDataForI2C() {
   doc["timestamp"] = millis(); // Use ESP32's millis() as timestamp
   doc["sequence"] = currentSensorSequenceNumber++;
   // Only include valid readings (check against initial error values)
-  if (temp > -999.0) doc["temp"] = serialized(String(temp, 1)); // 1 decimal place
-  if (humidity > -999.0) doc["humidity"] = serialized(String(humidity, 1));
-  if (pressure > -9999.0) doc["pressure"] = serialized(String(pressure, 1));
+  if (temp > -999.0) doc["temp"] = temp;
+  if (humidity > -999.0) doc["humidity"] = humidity;
+  if (pressure > -9999.0) doc["pressure"] = pressure;
   if (lux >= 0) doc["lux"] = lux;
   if (waterLevel >= 0) doc["waterLevel"] = waterLevel;
   String jsonString;
@@ -439,6 +446,9 @@ void prepareAckDataForI2C(unsigned long sequence, const char* status, const char
  */
 void receiveI2CCommand(int howMany) {
   Serial.printf("I2C Receive Event: %d bytes received.\n", howMany);
+  #ifdef ENABLE_DEEP_SLEEP
+    lastActivityMillis = millis();
+  #endif
   if (howMany <= 0 || howMany >= MAX_I2C_BUFFER) {
       Serial.printf("I2C Error: Invalid number of bytes received (%d).\n", howMany);
       while (Wire.available()) { Wire.read(); } // Clear buffer
@@ -501,6 +511,10 @@ void receiveI2CCommand(int howMany) {
  * @brief I2C Event Handler: Called when the I2C master requests data (onRequest).
  */
 void requestI2CData() {
+  #ifdef ENABLE_DEEP_SLEEP
+    lastActivityMillis = millis();
+    lastI2CRequestMillis = millis();
+  #endif
   Serial.print("I2C Request Event. Sending: ");
   if (!isAckPending) {
       readSensors(); // Read fresh data before sending
@@ -560,6 +574,9 @@ footer { margin-top: 30px; text-align: center; font-size: 0.9em; color: #6c757d;
   // Main Status page (GET) - No Authentication needed
   server.on("/", HTTP_GET, [buildHtml](AsyncWebServerRequest *request){
     readSensors(); // Update sensor values
+    #ifdef ENABLE_DEEP_SLEEP
+      lastActivityMillis = millis();
+    #endif
     String body = "<div class='card'><h2>Terminal Blocks</h2>";
     int term1State = digitalRead(TERMINAL_BLOCK_1_PIN); int term2State = digitalRead(TERMINAL_BLOCK_2_PIN);
     body += "<p>Terminal Block 1 <span class='state " + String(term1State == HIGH ? "state-on'>ON" : "state-off'>OFF") + "</span>"; body += "<a href='/terminal/1/on' class='button on'>ON</a><a href='/terminal/1/off' class='button off'>OFF</a></p>";
@@ -571,7 +588,12 @@ footer { margin-top: 30px; text-align: center; font-size: 0.9em; color: #6c757d;
   // Terminal control handler (GET, redirects) - No Authentication needed for basic control
   server.on("^\\/terminal\\/([1-2])\\/(on|off|reset)$", HTTP_GET, [](AsyncWebServerRequest *request){
     int terminal = request->pathArg(0).toInt(); String action = request->pathArg(1); int pin = -1; String responseText = ""; if (terminal == 1) pin = TERMINAL_BLOCK_1_PIN; else if (terminal == 2) pin = TERMINAL_BLOCK_2_PIN;
-    if (pin != -1) { if (action == "on") { digitalWrite(pin, HIGH); responseText = "T" + String(terminal) + " ON"; } else if (action == "off") { digitalWrite(pin, LOW); responseText = "T" + String(terminal) + " OFF"; } else if (action == "reset") { digitalWrite(pin, LOW); responseText = "T" + String(terminal) + " RESET"; } Serial.println(responseText + " via Web"); request->redirect("/"); }
+    if (pin != -1) { if (action == "on") { digitalWrite(pin, HIGH); responseText = "T" + String(terminal) + " ON"; } else if (action == "off") { digitalWrite(pin, LOW); responseText = "T" + String(terminal) + " OFF"; } else if (action == "reset") { digitalWrite(pin, LOW); responseText = "T" + String(terminal) + " RESET"; } 
+      Serial.println(responseText + " via Web");
+      #ifdef ENABLE_DEEP_SLEEP
+        lastActivityMillis = millis();
+      #endif
+      request->redirect("/"); }
     else { request->send(400, "text/plain", "Invalid Terminal"); }
   });
 
@@ -675,7 +697,16 @@ void setup() {
   // Increment boot number and print it every reboot
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
-  // TODO: Add logic here to decide if waking from sleep requires different setup
+
+  // Decide if this is a normal boot or a wake from deep sleep; skip full init on wake to save power.
+  esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
+  if (wakeCause == ESP_SLEEP_WAKEUP_UNDEFINED) {
+      Serial.println("Normal boot (power-on/reset). Performing full initialization.");
+      skipFullSetupOnWake = false;
+  } else {
+      Serial.printf("Woke from deep sleep (cause=%d). Performing reduced initialization to save power.\n", wakeCause);
+      skipFullSetupOnWake = true;
+  }
 #endif
 
   loadConfiguration(); // Load WiFi, I2C, Hostname, Web Password
@@ -703,10 +734,21 @@ void setup() {
   // Example: if (!lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) { Serial.println("Error initializing BH1750"); } // Initialize BH1750
   // -----------------------------------------
 
-  setupWiFi(); // Tries STA then AP, enables OTA if STA connects
-  setupWebServer(); // Runs in both modes
+  if (!skipFullSetupOnWake) {
+      setupWiFi(); // Tries STA then AP, enables OTA if STA connects
+      setupWebServer(); // Runs in both modes
+  } else {
+      Serial.println("Skipping WiFi and WebServer initialization after deep-sleep wake to conserve power.");
+      // Ensure state variables reflect limited initialization
+      wifiConnected = false;
+      apMode = false;
+  }
 
   readSensors(); // Initial sensor read
+
+  #ifdef ENABLE_DEEP_SLEEP
+    lastActivityMillis = millis();
+  #endif
 
   Serial.println("--- Setup Complete. Akita Sensor Ready. ---");
 
@@ -720,15 +762,27 @@ void setup() {
 void loop() {
 #ifdef ENABLE_DEEP_SLEEP
   // --- Deep Sleep Logic Example ---
-  Serial.println("Performing loop tasks...");
+  Serial.println("Performing loop tasks (deep-sleep mode)...");
   if (wifiConnected) { ArduinoOTA.handle(); }
-  readSensors(); // Read sensors before potentially sleeping
-  // TODO: Add logic to send data via I2C if master requests it *before* sleeping
-  // TODO: Check conditions for sleeping (e.g., inactivity timer, battery level)
+  readSensors(); // Refresh sensors before evaluating sleep conditions
 
-  Serial.printf("Entering deep sleep for %d seconds.\n", DEEP_SLEEP_SECONDS);
-  Serial.flush(); // Ensure serial messages are sent before sleep
-  goToDeepSleep();
+  // If master recently requested I2C data, give a short grace period to ensure it has read the latest values
+  if (lastI2CRequestMillis && (millis() - lastI2CRequestMillis) < 2000) {
+      Serial.println("Master recently requested I2C data — delaying sleep briefly to ensure read completes.");
+      delay(250); // small grace delay
+  }
+
+  // Decide whether to sleep: inactive for configured threshold OR forced by other conditions (battery, etc.)
+  if ((millis() - lastActivityMillis) >= INACTIVITY_BEFORE_SLEEP_MS) {
+      Serial.println("Inactivity threshold reached — preparing to enter deep sleep.");
+      Serial.printf("Entering deep sleep for %d seconds.\n", DEEP_SLEEP_SECONDS);
+      Serial.flush();
+      goToDeepSleep();
+  } else {
+      Serial.println("Activity detected — staying awake for now.");
+      delay(1000); // Short delay to conserve CPU while waiting for inactivity
+  }
+
   // --- End Deep Sleep Logic Example ---
 #else
   // --- Normal Operation (No Deep Sleep) ---

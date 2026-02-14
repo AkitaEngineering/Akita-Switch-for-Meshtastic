@@ -42,7 +42,7 @@ import sys
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from smbus2 import SMBus, I2cError
+from smbus2 import SMBus
 import paho.mqtt.client as paho # Import MQTT client library
 import ssl # For MQTT TLS support if needed
 
@@ -138,12 +138,12 @@ def setup_i2c(bus_num, slave_addr):
              log.debug(f"Pinging I2C slave at 0x{slave_addr:02x}...")
              i2c_bus.read_i2c_block_data(slave_addr, 0, 1)
              log.info(f"Successfully communicated with I2C slave 0x{slave_addr:02x} on bus {bus_num}.")
-        except I2cError as read_err:
+        except OSError as read_err:
              log.warning(f"Initial I2C read check to slave 0x{slave_addr:02x} failed: {read_err}. Continuing...")
         return True
     except FileNotFoundError: log.error(f"ERROR: I2C bus {bus_num} not found."); return False
     except PermissionError: log.error(f"ERROR: Permission denied accessing I2C bus {bus_num}. Add user to 'i2c' group."); return False
-    except I2cError as e: log.error(f"ERROR: Failed to initialize I2C bus {bus_num} or talk to slave 0x{slave_addr:02x}: {e}"); return False
+    except OSError as e: log.error(f"ERROR: Failed to initialize I2C bus {bus_num} or talk to slave 0x{slave_addr:02x}: {e}"); return False
     except Exception as e: log.error(f"ERROR: Unexpected error initializing I2C: {e}"); return False
 
 def parse_i2c_data(raw_data_list):
@@ -170,13 +170,16 @@ def read_i2c_data(slave_addr, max_len):
         data_list = i2c_bus.read_i2c_block_data(slave_addr, 0, max_len)
         log.debug(f"Read I2C raw byte list: {data_list}")
         return parse_i2c_data(data_list)
-    except I2cError as e: log.debug(f"I2C read error from slave 0x{slave_addr:02x}: {e}"); return None # Common if slave busy
+    except OSError as e: log.debug(f"I2C read error from slave 0x{slave_addr:02x}: {e}"); return None # Common if slave busy
     except Exception as e: log.error(f"Unexpected error reading I2C: {e}"); return None
 
 def send_i2c_command(command, slave_addr, timeout, poll_interval, max_read_len):
     """Sends a command dict as JSON via I2C and waits for a specific acknowledgment JSON."""
     if not i2c_bus: log.error("I2C bus not initialized."); return False
-    sequence = command.get("sequence"); if sequence is None: log.error("Command missing 'sequence'."); return False
+    sequence = command.get("sequence")
+    if sequence is None:
+        log.error("Command missing 'sequence'.")
+        return False
     try:
         json_command = json.dumps(command, separators=(',', ':')); command_bytes_list = list(bytes(json_command, 'utf-8'))
         if len(command_bytes_list) > 32: log.warning(f"Command JSON > 32 bytes ({len(command_bytes_list)} bytes). SMBus write may truncate!")
@@ -202,7 +205,7 @@ def send_i2c_command(command, slave_addr, timeout, poll_interval, max_read_len):
             if time.time() - start_time >= timeout: log.error(f"Command (Seq: {sequence}) timed out after {timeout:.1f}s waiting for ACK.")
             return False
         else: return True
-    except I2cError as e: log.error(f"I2C error during send/ack (Seq: {sequence}): {e}"); return False
+    except OSError as e: log.error(f"I2C error during send/ack (Seq: {sequence}): {e}"); return False
     except Exception as e: log.error(f"Unexpected error sending/receiving ACK (Seq: {sequence}): {e}"); return False
 
 # --- Meshtastic Functions ---
@@ -214,16 +217,33 @@ def setup_meshtastic(device_port=None):
         log.info("Connecting to Meshtastic device...")
         if device_port: log.info(f"Using specified port: {device_port}"); meshtastic_interface = meshtastic.serial_interface.SerialInterface(devPath=device_port)
         else: log.info("Attempting auto-detect..."); meshtastic_interface = meshtastic.serial_interface.SerialInterface()
-        log.info("Waiting for node info..."); time.sleep(3)
-        if not meshtastic_interface or not meshtastic_interface.myInfo or not meshtastic_interface.nodeInfo: log.error("Failed to get node info."); if meshtastic_interface: meshtastic_interface.close(); return False
-        my_node_num = meshtastic_interface.myInfo.my_node_num; my_node_id = meshtastic_interface.myInfo.node_id; my_user_id = meshtastic_interface.myInfo.user_id
+        log.info("Waiting for node info...")
+        time.sleep(3)
+        if not meshtastic_interface or not meshtastic_interface.myInfo or not meshtastic_interface.nodeInfo:
+            log.error("Failed to get node info.")
+            if meshtastic_interface:
+                meshtastic_interface.close()
+            return False
+        my_node_num = meshtastic_interface.myInfo.my_node_num
+        my_node_id = meshtastic_interface.myInfo.node_id
+        my_user_id = meshtastic_interface.myInfo.user_id
         log.info(f"Connected to Meshtastic node: User='{my_user_id}', ID={my_node_id}, Num={my_node_num}")
         log.info(f"Meshtastic lib v{meshtastic.__version__}, Device FW: {meshtastic_interface.nodeInfo.firmware_version}")
         meshtastic_interface.add_receive_callback(on_mesh_receive)
         log.info("Meshtastic receive callback registered.")
         return True
-    except meshtastic.MeshtasticError as e: log.error(f"Meshtastic connection error: {e}"); if not device_port: log.error("Try specifying --port."); if meshtastic_interface: meshtastic_interface.close(); return False
-    except Exception as e: log.error(f"Unexpected error setting up Meshtastic: {e}"); if meshtastic_interface: meshtastic_interface.close(); return False
+    except meshtastic.MeshtasticError as e:
+        log.error(f"Meshtastic connection error: {e}")
+        if not device_port:
+            log.error("Try specifying --port.")
+        if meshtastic_interface:
+            meshtastic_interface.close()
+        return False
+    except Exception as e:
+        log.error(f"Unexpected error setting up Meshtastic: {e}")
+        if meshtastic_interface:
+            meshtastic_interface.close()
+        return False
 
 def on_mesh_receive(packet, interface): # pylint: disable=unused-argument
     """Callback function executed when a packet is received from the Meshtastic network."""
